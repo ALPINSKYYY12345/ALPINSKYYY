@@ -1,91 +1,44 @@
-from flask import Flask, render_template, request, jsonify
-import sqlite3
-from pathlib import Path
-from datetime import date
+from flask import Flask, render_template, request, redirect, url_for
 
 app = Flask(__name__)
-DB = Path(__file__).with_name('database.db')
 
-def connect():
-    con = sqlite3.connect(DB)
-    con.row_factory = sqlite3.Row
-    return con
-
-def init_db():
-    with connect() as con:
-        con.execute('''CREATE TABLE IF NOT EXISTS transaksi (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            tanggal TEXT NOT NULL,
-            jenis TEXT NOT NULL CHECK(jenis IN ('pemasukan','pengeluaran')),
-            kategori TEXT NOT NULL,
-            keterangan TEXT NOT NULL,
-            jumlah INTEGER NOT NULL CHECK(jumlah > 0)
-        )''')
+# Data sementara disimpan di memori (list of dictionaries)
+transactions = [
+    {"id": 1, "tipe": "pemasukan", "kategori": "Uang Saku", "jumlah": 2000000, "catatan": "Transfer Orang Tua"},
+    {"id": 2, "tipe": "pengeluaran", "kategori": "Makanan", "jumlah": 50000, "catatan": "Makan Siang"}
+]
 
 @app.route('/')
 def index():
-    return render_template('index.html')
+    # Hitung ringkasan saldo langsung di kode Python
+    total_pemasukan = sum(t['jumlah'] for t in transactions if t['tipe'] == 'pemasukan')
+    total_pengeluaran = sum(t['jumlah'] for t in transactions if t['tipe'] == 'pengeluaran')
+    total_saldo = total_pemasukan - total_pengeluaran
 
-@app.get('/api/transaksi')
-def get_transaksi():
-    # Ambil parameter query dari URL (contoh: /api/transaksi?bulan=10&tahun=2026 atau ?jenis=pengeluaran)
-    bulan = request.args.get('bulan')  # format angka string: "01", "02", ..., "12"
-    tahun = request.args.get('tahun')  # format angka string: "2026"
-    jenis = request.args.get('jenis')  # "pemasukan" atau "pengeluaran"
+    return render_template('index.html', 
+                           transactions=transactions, 
+                           total_saldo=total_saldo, 
+                           total_pemasukan=total_pemasukan, 
+                           total_pengeluaran=total_pengeluaran)
 
-    query = 'SELECT * FROM transaksi WHERE 1=1'
-    params = []
-
-    # Filter jenis transaksi jika dikirim
-    if jenis and jenis != 'semua':
-        query += ' AND jenis = ?'
-        params.append(jenis)
-
-    # Filter tahun jika dikirim (menggunakan strftime SQLite)
-    if tahun and tahun != 'semua':
-        query += " AND strftime('%Y', tanggal) = ?"
-        params.append(tahun)
-
-    # Filter bulan jika dikirim
-    if bulan and bulan != 'semua':
-        # Memastikan format bulan 2 digit (misal: '9' jadi '09')
-        bulan_formatted = f"{int(bulan):02d}"
-        query += " AND strftime('%m', tanggal) = ?"
-        params.append(bulan_formatted)
-
-    query += ' ORDER BY tanggal DESC, id DESC'
-
-    with connect() as con:
-        rows = con.execute(query, params).fetchall()
-    return jsonify([dict(r) for r in rows])
-
-@app.post('/api/transaksi')
+@app.route('/tambah', methods=['POST'])
 def tambah_transaksi():
-    data = request.get_json(silent=True) or {}
-    try:
-        jenis = data['jenis']
-        kategori = str(data['kategori']).strip()
-        keterangan = str(data['keterangan']).strip()
-        tanggal = date.fromisoformat(data['tanggal']).isoformat()
-        jumlah = int(data['jumlah'])
-        if jenis not in ('pemasukan', 'pengeluaran') or not kategori or not keterangan or jumlah <= 0:
-            raise ValueError('Data tidak valid')
-    except (KeyError, TypeError, ValueError):
-        return jsonify(error='Periksa kembali data transaksi.'), 400
-    with connect() as con:
-        cur = con.execute('INSERT INTO transaksi (tanggal, jenis, kategori, keterangan, jumlah) VALUES (?, ?, ?, ?, ?)',
-                          (tanggal, jenis, kategori, keterangan, jumlah))
-        new_id = cur.lastrowid
-    return jsonify(id=new_id, message='Transaksi berhasil disimpan.'), 201
+    # Mengambil data dari form dan menambahkan ke list
+    tipe = request.form.get('tipe')
+    kategori = request.form.get('kategori')
+    jumlah = int(request.form.get('jumlah', 0))
+    catatan = request.form.get('catatan')
 
-@app.delete('/api/transaksi/<int:id>')
-def hapus_transaksi(id):
-    with connect() as con:
-        cur = con.execute('DELETE FROM transaksi WHERE id = ?', (id,))
-        if cur.rowcount == 0:
-            return jsonify(error='Transaksi tidak ditemukan.'), 404
-    return jsonify(message='Transaksi dihapus.')
+    new_id = len(transactions) + 1
+    transactions.append({
+        "id": new_id,
+        "tipe": tipe,
+        "kategori": kategori,
+        "jumlah": jumlah,
+        "catatan": catatan
+    })
+    
+    return redirect(url_for('index'))
 
 if __name__ == '__main__':
-    init_db()
     app.run(debug=True)
